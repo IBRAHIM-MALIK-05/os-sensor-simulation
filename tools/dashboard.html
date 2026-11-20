@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sensor Dashboard</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121922;
+    --panel-2: #0e141c;
+    --border: #212d3a;
+    --text: #e8eef4;
+    --muted: #93a1b0;
+    --dim: #5f6d7c;
+    --lidar: #38bdf8;
+    --camera: #c084fc;
+    --gps: #34d399;
+    --ai: #f0f4f8;
+    --green: #34d399;
+    --amber: #fbbf24;
+    --red: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 16px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1400px; margin: 0 auto; }
+
+  /* header */
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-bottom: 16px; }
+  header h1 { font-size: 20px; margin: 0; font-weight: 700; }
+  header p { margin: 0; color: var(--muted); font-size: 14px; flex-basis: 100%; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 3px 11px; border-radius: 999px;
+    font-size: 12.5px; font-weight: 600; border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .pill.running { color: var(--green); } .pill.running .dot { background: var(--green); animation: pulse 1.4s infinite; }
+  .pill.bad { color: var(--red); } .pill.bad .dot { background: var(--red); }
+  .clock { margin-left: auto; color: var(--muted); font-size: 14px; }
+  .clock b { color: var(--text); }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 4px; font-weight: 700; }
+  .hint { color: var(--dim); font-size: 13px; margin: 0 0 10px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; min-width: 0; }
+
+  /* ---------- data flow ---------- */
+  .flow {
+    display: grid; align-items: center; gap: 10px;
+    grid-template-columns: minmax(0, 1.25fr) 44px minmax(0, 1.1fr) 44px minmax(0, 1fr);
+  }
+  .sensors { display: grid; gap: 10px; }
+  .box { background: var(--panel-2); border: 1px solid var(--border); border-left: 4px solid; border-radius: 10px; padding: 10px 12px; }
+  .box .name { font-size: 12px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; display: flex; gap: 8px; align-items: baseline; }
+  .box .name span { color: var(--dim); font-weight: 500; text-transform: none; letter-spacing: 0; }
+  .box .value { font-size: 17px; font-weight: 600; margin-top: 2px; }
+  .box .small { color: var(--muted); font-size: 12.5px; }
+  .arrow { position: relative; height: 4px; background: var(--border); border-radius: 2px; }
+  .arrow::after {
+    content: ""; position: absolute; right: -2px; top: -6px;
+    border-left: 10px solid var(--border); border-top: 8px solid transparent; border-bottom: 8px solid transparent;
+  }
+  .arrow i { position: absolute; top: -3px; width: 10px; height: 10px; border-radius: 50%; background: var(--lidar); animation: travel 1s linear infinite; }
+  @keyframes travel { from { left: 0; opacity: 1; } to { left: calc(100% - 10px); opacity: .2; } }
+  .combine { border-left-color: var(--ai); }
+  .combine .row { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+  .combine .row:last-child { border-bottom: 0; }
+  .combine .row span:first-child { color: var(--muted); }
+  .decision { text-align: center; }
+  .badge {
+    display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 3px; padding: 10px 24px; border-radius: 12px;
+    border: 2px solid currentColor; min-width: 190px; transition: color .2s, background .2s;
+  }
+  .badge.CRUISE { color: var(--green); background: rgba(52, 211, 153, .08); }
+  .badge.SLOW { color: var(--amber); background: rgba(251, 191, 36, .1); }
+  .badge.BRAKE { color: var(--red); background: rgba(248, 113, 113, .14); animation: flash .5s infinite alternate; }
+  @keyframes flash { to { background: rgba(248, 113, 113, .3); } }
+  .reason { color: var(--muted); font-size: 13.5px; margin-top: 8px; }
+  .rules { color: var(--dim); font-size: 12px; margin-top: 6px; }
+  .saved {
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 6px 22px; color: var(--muted); font-size: 13px;
+  }
+  .saved b { color: var(--text); font-weight: 600; }
+  code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; color: var(--text); }
+
+  /* ---------- views ---------- */
+  .views { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); margin-top: 14px; }
+  .cam { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; overflow: hidden; }
+  .cam img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .cam .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); }
+  .det { position: absolute; border: 2px solid var(--green); border-radius: 3px; display: none; transition: all .08s linear; }
+  .det span {
+    position: absolute; left: -2px; bottom: 100%; margin-bottom: 3px; white-space: nowrap;
+    background: var(--green); color: #06110c; font-size: 12px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+  }
+  canvas { display: block; width: 100%; }
+  #radar { aspect-ratio: 1 / 1; max-height: 430px; margin: 0 auto; }
+  #map { aspect-ratio: 4.2 / 1; min-height: 200px; border-radius: 10px; }
+  .key { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  .key i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+
+  @media (max-width: 1000px) {
+    .flow { grid-template-columns: minmax(0, 1fr); }
+    .arrow { width: 4px; height: 30px; margin: 0 auto; }
+    .arrow::after { right: auto; top: auto; bottom: -8px; left: -6px; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 10px solid var(--border); border-bottom: 0; }
+    .arrow i { animation: none; display: none; }
+    .views { grid-template-columns: minmax(0, 1fr); }
+    .clock { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Self-Driving Car · Sensor Simulation</h1>
+    <span id="status" class="pill"><span class="dot"></span><span id="statusText">connecting…</span></span>
+    <span class="clock num">Time <b id="simTime">0.0 s</b> · Speed <b id="carSpeed">–</b></span>
+    <p>Three simulated sensors look at the same road. Their readings are combined into one picture of the world, and the car decides what to do.</p>
+  </header>
+
+  <!-- 1. where the data goes -->
+  <section class="card">
+    <h2>How the data flows</h2>
+    <p class="hint">Left to right: each sensor produces data → the AI processor combines it → a driving decision.</p>
+    <div class="flow">
+      <div class="sensors">
+        <div class="box" style="border-left-color:var(--lidar)">
+          <div class="name" style="color:var(--lidar)">LIDAR <span>laser distances · 10 times per second</span></div>
+          <div class="value num" id="lidarValue">–</div>
+          <div class="small num" id="lidarSmall">–</div>
+        </div>
+        <div class="box" style="border-left-color:var(--camera)">
+          <div class="name" style="color:var(--camera)">Camera <span>picture of the road · 10 per second</span></div>
+          <div class="value" id="camValue">–</div>
+          <div class="small num" id="camSmall">–</div>
+        </div>
+        <div class="box" style="border-left-color:var(--gps)">
+          <div class="name" style="color:var(--gps)">GPS <span>position · 5 times per second</span></div>
+          <div class="value num" id="gpsValue">–</div>
+          <div class="small num" id="gpsSmall">–</div>
+        </div>
+      </div>
+      <div class="arrow"><i></i></div>
+      <div class="box combine">
+        <div class="name">AI processor <span>combines the 3 readings</span></div>
+        <div class="row"><span>Obstacle</span><b id="cObs">–</b></div>
+        <div class="row num"><span>Distance (LIDAR)</span><b id="cLid">–</b></div>
+        <div class="row num"><span>Distance (Camera)</span><b id="cCam">–</b></div>
+        <div class="row num"><span>Sensors agree?</span><b id="cAgree">–</b></div>
+        <div class="row num"><span>Car position (GPS)</span><b id="cPos">–</b></div>
+      </div>
+      <div class="arrow"><i style="background:var(--ai)"></i></div>
+      <div class="decision">
+        <div id="badge" class="badge CRUISE">–</div>
+        <div class="reason" id="reason">–</div>
+        <div class="rules">BRAKE &lt; 10 m · SLOW &lt; 25 m · otherwise CRUISE</div>
+      </div>
+    </div>
+    <div class="saved num">
+      <span>💾 Every reading is saved to <code>sim_output\</code>:</span>
+      <span><code>lidar.csv</code> <b id="sL">0</b> rows</span>
+      <span><code>camera.csv</code> <b id="sC">0</b> rows</span>
+      <span><code>gps.csv</code> <b id="sG">0</b> rows</span>
+      <span><code>combined.csv</code> <b id="sX">0</b> rows</span>
+      <span><code>camera\</code> every 50th picture</span>
+      <span id="rate">–</span>
+    </div>
+  </section>
+
+  <!-- 2. what the sensors see -->
+  <div class="views">
+    <section class="card">
+      <h2 style="color:var(--camera)">What the camera sees</h2>
+      <p class="hint" id="camHint">The live picture. The box marks the obstacle the car is watching.</p>
+      <div class="cam" id="camBox">
+        <div class="empty" id="camEmpty">waiting for the first picture…</div>
+        <img id="camImg" alt="Live camera picture">
+        <div class="det" id="det"><span id="detLabel"></span></div>
+      </div>
+    </section>
+    <section class="card">
+      <h2 style="color:var(--lidar)">What the LIDAR sees (from above)</h2>
+      <p class="hint">Our car is in the middle, driving up. Every dot is a laser hit on an obstacle.</p>
+      <canvas id="radar"></canvas>
+      <div class="key">
+        <span><i style="background:var(--red)"></i>closer than 10 m</span>
+        <span><i style="background:var(--amber)"></i>10–25 m</span>
+        <span><i style="background:var(--green)"></i>further</span>
+      </div>
+    </section>
+  </div>
+
+  <!-- 3. where the car is -->
+  <section class="card" style="margin-top:14px">
+    <h2 style="color:var(--gps)">Where GPS says the car is</h2>
+    <p class="hint">The map moves with the car. Green dots are GPS readings: they wobble around the true position because GPS is never perfectly accurate (±1.5 m).</p>
+    <canvas id="map"></canvas>
+  </section>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = { red: css("--red"), amber: css("--amber"), green: css("--green"), text: css("--text"), muted: css("--muted"),
+            dim: css("--dim"), lidar: css("--lidar"), gps: css("--gps"), panel2: css("--panel-2") };
+const ICON = { car: "🚗", truck: "🚚", pedestrian: "🚶", cyclist: "🚴", cone: "🚧", sign: "⛔" };
+const NAME = { car: "car", truck: "truck", pedestrian: "person", cyclist: "cyclist", cone: "traffic cone", sign: "road sign" };
+const M_PER_DEG = 111320;
+
+let world = null, state = null, lastT = -1, camLoading = false, camShown = -1;
+const gpsTrail = [];
+
+// ---------- helpers ----------
+function fitCanvas(cv) {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: r.width, h: r.height };
+}
+const distColor = d => d < 10 ? C.red : d < 25 ? C.amber : C.green;
+const side = b => Math.abs(b) < 4 ? "straight ahead" : (b > 0 ? "on the left" : "on the right");
+function fmtBytes(b) {
+  if (b >= 1048576) return (b / 1048576).toFixed(1) + " MB";
+  if (b >= 1024) return (b / 1024).toFixed(1) + " KB";
+  return Math.round(b) + " B";
+}
+function toM(lat, lon) {
+  const r = world.road;
+  return { x: (lon - r.lon0) * M_PER_DEG * Math.cos(r.lat0 * Math.PI / 180), y: (lat - r.lat0) * M_PER_DEG };
+}
+function wrapDx(dx) { const L = world.length; return dx > L / 2 ? dx - L : dx < -L / 2 ? dx + L : dx; }
+function emoji(ctx, ch, x, y, size, flip) {
+  ctx.save(); ctx.translate(x, y); if (flip) ctx.scale(-1, 1);
+  ctx.font = `${size}px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif`;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(ch, 0, 0); ctx.restore();
+}
+
+// ---------- LIDAR radar ----------
+const RANGE = 50;
+function drawRadar(now) {
+  const { ctx, w, h } = fitCanvas($("radar"));
+  const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 16, k = R / RANGE;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#0d1a26"; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+  // rings
+  ctx.strokeStyle = "rgba(147,161,176,0.22)"; ctx.lineWidth = 1; ctx.fillStyle = C.dim; ctx.font = "11px system-ui"; ctx.textAlign = "left";
+  for (const m of [10, 25, 50]) { ctx.beginPath(); ctx.arc(cx, cy, m * k, 0, Math.PI * 2); ctx.stroke(); ctx.fillText(m + " m", cx + 4, cy - m * k + 13); }
+  // gentle sweep
+  const a = (now / 1000) * Math.PI;
+  if (ctx.createConicGradient) {
+    const g = ctx.createConicGradient(a - Math.PI / 2 - 0.3, cx, cy);
+    g.addColorStop(0, "rgba(56,189,248,0)"); g.addColorStop(0.045, "rgba(56,189,248,0.12)"); g.addColorStop(0.05, "rgba(56,189,248,0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+  }
+  if (state && world) {
+    const L = state.lidar, n = L.ranges.length;
+    for (let i = 0; i < n; i++) {
+      const d = L.ranges[i];
+      if (d >= world.lidarRange - 0.01 || d > RANGE) continue;
+      const rel = i * 2 * Math.PI / n;
+      ctx.fillStyle = distColor(d);
+      ctx.beginPath(); ctx.arc(cx - d * Math.sin(rel) * k, cy - d * Math.cos(rel) * k, 2.6, 0, Math.PI * 2); ctx.fill();
+    }
+    if (L.nearest < world.lidarRange - 0.01 && L.nearest <= RANGE) {
+      const rel = L.bearing * Math.PI / 180, x = cx - L.nearest * Math.sin(rel) * k, y = cy - L.nearest * Math.cos(rel) * k;
+      ctx.strokeStyle = C.text; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y); ctx.stroke(); ctx.setLineDash([]);
+      const kind = state.camera.sees ? state.camera.sees.kind : null;
+      const label = (kind ? NAME[kind] + " · " : "") + L.nearest.toFixed(1) + " m";
+      ctx.font = "600 12.5px system-ui"; const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(5,8,12,0.85)"; ctx.fillRect(x + 10, y - 11, tw + 12, 22);
+      ctx.fillStyle = C.text; ctx.textAlign = "left"; ctx.fillText(label, x + 16, y + 4);
+    }
+  }
+  // our car
+  ctx.fillStyle = C.lidar;
+  ctx.beginPath(); ctx.moveTo(cx, cy - 12); ctx.lineTo(cx + 8, cy + 9); ctx.lineTo(cx, cy + 4); ctx.lineTo(cx - 8, cy + 9); ctx.closePath(); ctx.fill();
+}
+
+// ---------- GPS map ----------
+const BEHIND = 30, AHEAD = 90;
+function drawMap() {
+  const { ctx, w, h } = fitCanvas($("map"));
+  ctx.clearRect(0, 0, w, h);
+  if (!world || !state) return;
+  const car = state.car, k = w / (BEHIND + AHEAD), ox = BEHIND * k, oy = h / 2;
+  const sx = x => ox + wrapDx(x - car.x) * k, sy = y => oy - y * k;
+  ctx.fillStyle = "#14261b"; ctx.fillRect(0, 0, w, h);                         // grass
+  ctx.fillStyle = "#2a3038"; ctx.fillRect(0, sy(7.6), w, 15.2 * k);            // road
+  ctx.fillStyle = "#e8eef4"; ctx.fillRect(0, sy(7.6), w, 2); ctx.fillRect(0, sy(-7.6) - 2, w, 2);
+  // distance marks
+  ctx.fillStyle = C.dim; ctx.font = "11px system-ui"; ctx.textAlign = "center";
+  for (let gx = Math.ceil((car.x - BEHIND) / 25) * 25; gx <= car.x + AHEAD; gx += 25) {
+    const X = ox + (gx - car.x) * k, m = ((gx % world.length) + world.length) % world.length;
+    ctx.fillRect(X, h - 14, 1, 6); ctx.fillText(m + " m", X, h - 2);
+  }
+  // obstacles as icons
+  for (const o of world.obstacles) {
+    const X = sx(o.x);
+    if (X < -30 || X > w + 30) continue;
+    emoji(ctx, ICON[o.kind] || "●", X, sy(o.y), Math.max(24, Math.min(34, k * 2.6)), o.kind !== "sign" && o.kind !== "cone");
+  }
+  // GPS readings
+  gpsTrail.forEach((p, i) => {
+    const X = sx(p.x);
+    ctx.fillStyle = `rgba(52,211,153,${0.15 + 0.85 * (i + 1) / gpsTrail.length})`;
+    ctx.beginPath(); ctx.arc(X, sy(p.y), 3.5, 0, Math.PI * 2); ctx.fill();
+  });
+  // our car (true position)
+  ctx.save(); ctx.translate(ox, sy(car.y)); ctx.rotate(-car.heading * Math.PI / 180);
+  ctx.fillStyle = C.lidar; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(-14, -7, 28, 14, 4) : ctx.rect(-14, -7, 28, 14); ctx.fill();
+  ctx.fillStyle = "#0b0f14"; ctx.fillRect(4, -5, 6, 10);
+  ctx.restore();
+  ctx.fillStyle = C.text; ctx.font = "600 12px system-ui"; ctx.textAlign = "center"; ctx.fillText("our car", ox, sy(car.y) + 22);
+  // legend
+  ctx.textAlign = "left"; ctx.font = "12px system-ui";
+  ctx.fillStyle = C.lidar; ctx.fillRect(10, 10, 12, 8); ctx.fillStyle = C.text; ctx.fillText("true position", 27, 18);
+  ctx.fillStyle = C.gps; ctx.beginPath(); ctx.arc(125, 14, 4, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = C.text; ctx.fillText("GPS readings", 134, 18);
+}
+
+// ---------- text ----------
+function update(s) {
+  const L = s.lidar, cam = s.camera, g = s.gps, seen = L.nearest < world.lidarRange - 0.01;
+  $("simTime").textContent = s.t.toFixed(1) + " s";
+  $("carSpeed").textContent = (s.car.speed * 3.6).toFixed(0) + " km/h";
+
+  // sensors
+  $("lidarValue").textContent = seen ? `Nearest obstacle ahead: ${L.nearest.toFixed(1)} m` : "Road ahead is clear";
+  $("lidarSmall").textContent = `scan #${L.scan} · ${L.ranges.length} distance points · ${fmtBytes(L.bytes)} each`;
+  $("camValue").textContent = cam.sees ? `Sees a ${NAME[cam.sees.kind]} ${ICON[cam.sees.kind]} ${cam.sees.dist.toFixed(1)} m, ${side(cam.sees.bearing)}` : "Sees a clear road";
+  $("camSmall").textContent = `picture #${cam.frame} · ${cam.source === "photos" ? cam.image : "640×360"} · ${fmtBytes(cam.bytes)} each`;
+  $("gpsValue").textContent = `${g.lat.toFixed(5)}° N, ${g.lon.toFixed(5)}° E`;
+  $("gpsSmall").textContent = `fix #${g.fix} · ${(g.speed * 3.6).toFixed(0)} km/h · accuracy ±${g.acc.toFixed(1)} m · 64 B each`;
+
+  // combine
+  $("cObs").textContent = cam.sees ? `${ICON[cam.sees.kind]} ${NAME[cam.sees.kind]}, ${side(cam.sees.bearing)}` : (seen ? "something ahead" : "none");
+  $("cLid").textContent = seen ? L.nearest.toFixed(2) + " m" : "clear";
+  $("cCam").textContent = cam.sees ? cam.sees.dist.toFixed(2) + " m" : "clear";
+  const ag = $("cAgree");
+  if (seen && cam.sees) {
+    const diff = Math.abs(L.nearest - cam.sees.dist);
+    ag.textContent = diff <= 1 ? `yes ✓ (${diff.toFixed(2)} m apart)` : "partly (object at edge of view)";
+    ag.style.color = diff <= 1 ? C.green : C.amber;
+  } else { ag.textContent = seen || cam.sees ? "–" : "yes ✓ (both clear)"; ag.style.color = seen || cam.sees ? "" : C.green; }
+  $("cPos").textContent = `${Math.max(0, toM(g.lat, g.lon).x).toFixed(0)} m along the road`;
+
+  // decision
+  const b = $("badge"); b.textContent = s.decision; b.className = "badge " + s.decision;
+  const what = cam.sees ? NAME[cam.sees.kind] : "obstacle";
+  $("reason").textContent = s.decision === "BRAKE" ? `${what} only ${L.nearest.toFixed(1)} m ahead`
+    : s.decision === "SLOW" ? `${what} ${L.nearest.toFixed(1)} m ahead – slowing down` : "nothing within 25 m – keep driving";
+
+  // saved files
+  $("sL").textContent = s.counts.lidar; $("sC").textContent = s.counts.camera; $("sG").textContent = s.counts.gps; $("sX").textContent = s.counts.lidar;
+  const total = s.rates.lidar + s.rates.camera + s.rates.gps;
+  $("rate").textContent = `Data rate ${fmtBytes(total)}/s → a 10 MB buffer would fill in ${(10 * 1048576 / total).toFixed(1)} s`;
+
+  // camera picture + detection box
+  if (cam.frame !== camShown && !camLoading) {
+    camLoading = true;
+    const img = $("camImg"), want = cam.frame, box = cam.box, sees = cam.sees, W = cam.w, H = cam.h;
+    img.onload = () => {
+      camLoading = false; camShown = want; $("camEmpty").style.display = "none";
+      const det = $("det");
+      if (box && sees) {
+        det.style.display = "block";
+        det.style.left = (100 * box[0] / W) + "%"; det.style.top = (100 * box[1] / H) + "%";
+        det.style.width = (100 * (box[2] - box[0]) / W) + "%"; det.style.height = (100 * (box[3] - box[1]) / H) + "%";
+        const col = distColor(sees.dist);
+        det.style.borderColor = col; $("detLabel").style.background = col;
+        $("detLabel").textContent = `${NAME[sees.kind]} · ${sees.dist.toFixed(1)} m`;
+      } else det.style.display = "none";
+    };
+    img.onerror = () => { camLoading = false; };
+    img.src = "/camera?f=" + want;
+  }
+  $("camHint").textContent = cam.source === "photos"
+    ? "Showing your photos from assets\\camera (chosen by the type of obstacle in front)."
+    : "The live picture. The box marks the obstacle the car is watching.";
+}
+
+function ingest(s) {
+  if (s.t < lastT) gpsTrail.length = 0;   // simulator restarted
+  lastT = s.t; state = s;
+  const p = toM(s.gps.lat, s.gps.lon), last = gpsTrail[gpsTrail.length - 1];
+  if (!last || last.fix !== s.gps.fix) { gpsTrail.push({ x: p.x, y: p.y, fix: s.gps.fix }); if (gpsTrail.length > 30) gpsTrail.shift(); }
+  update(s); drawMap();
+}
+
+function setStatus(kind, text) { $("status").className = "pill " + kind; $("statusText").textContent = text; }
+
+async function loadWorld() {
+  while (!world) {
+    try { const w = await (await fetch("/world", { cache: "no-store" })).json(); if (w) world = w; }
+    catch (e) { setStatus("bad", "dashboard server not running"); }
+    if (!world) await new Promise(r => setTimeout(r, 400));
+  }
+}
+async function poll() {
+  try {
+    const msg = await (await fetch("/state", { cache: "no-store" })).json();
+    if (msg.state && msg.state.t !== lastT) ingest(msg.state);
+    if (msg.status === "running") setStatus("running", "live");
+    else if (msg.status === "finished") setStatus("", "simulation finished");
+    else if (msg.status === "stopped") setStatus("bad", "simulator stopped");
+    else setStatus("", "starting…");
+  } catch (e) { setStatus("bad", "disconnected – is dashboard.py running?"); }
+  setTimeout(poll, 100);
+}
+function frame(now) { drawRadar(now); requestAnimationFrame(frame); }
+window.addEventListener("resize", () => { if (state) drawMap(); });
+loadWorld().then(() => { poll(); requestAnimationFrame(frame); });
+</script>
+</body>
+</html>
